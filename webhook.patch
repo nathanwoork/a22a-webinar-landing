@@ -1,0 +1,55 @@
+diff --git a/index.html b/index.html
+index 82e912f..ad9e406 100644
+--- a/index.html
++++ b/index.html
+@@ -1097,6 +1097,42 @@ body.on-thanks .site,body.on-thanks .appx{display:none}
+   function clearErr(id){ var f = $(id); f.classList.remove('a22a-field--error'); f.querySelector('.a22a-field__help').textContent = HELP[id]; }
+   function digits(x){ return x.replace(/[^\d]/g,''); }
+ 
++  // ---------- n8n hand-off: Zoom registration, calendar invite, Google Sheet ----------
++  var WEBHOOK = 'https://nathanwoork.app.n8n.cloud/webhook/webinar-signup';
++  // Anything here is visible to anyone who views the page source. Prefer leaving these
++  // empty and letting n8n look up the Zoom link from session_id.
++  var ZOOM_LINKS = {thu19:'', thu26:'', tue17:'', tue24:''};
++
++  function sendToN8n(lead, v, s){
++    var payload = {
++      name: lead.name,
++      email: lead.email,
++      phone: lead.phone,
++      whatsapp: lead.wa,
++      session_id: s.id,
++      trainer: v.trainer,
++      language: v.lang,
++      source: srcSel.value,
++      version: verSel.value,
++      webinar_title: 'Free AI Content Webinar',
++      webinar_start: s.start + '+08:00',
++      webinar_end: s.end + '+08:00',
++      all_day: !!s.allDay,
++      webinar_description: 'Free webinar with ' + v.trainer,
++      zoom_link: ZOOM_LINKS[s.id] || ''
++    };
++    // Fire and forget: the visitor goes straight to the thank-you page (no loading step).
++    // keepalive lets the request finish even while the page changes.
++    try {
++      fetch(WEBHOOK, {
++        method: 'POST',
++        headers: {'Content-Type': 'application/json'},
++        body: JSON.stringify(payload),
++        keepalive: true
++      }).catch(function(err){ console.warn('n8n webhook failed', err); });
++    } catch(err){ console.warn('n8n webhook failed', err); }
++  }
++
+   $('stateForm').addEventListener('submit', function(e){
+     e.preventDefault();
+     px('Lead (button click)');
+@@ -1109,6 +1145,7 @@ body.on-thanks .site,body.on-thanks .appx{display:none}
+     if(w < 9 || w > 13){ setErr('fWa','Enter a Malaysian mobile number, such as 012 345 6789.'); ok = false; first = first || 'wa'; } else clearErr('fWa');
+     if(!same){ var ph = digits(phoneRaw).length; if(ph < 9 || ph > 13){ setErr('fPhone','Enter a phone number, such as 012 345 6789.'); ok = false; first = first || 'phone'; } else clearErr('fPhone'); }
+     if(!ok){ $(first).focus(); return; }
++    sendToN8n({name:name, email:email, wa:waRaw, phone:phoneRaw}, V(), S());
+     showThanks({name:name, email:email, wa:waRaw, phone:phoneRaw});
+   });
+ 
