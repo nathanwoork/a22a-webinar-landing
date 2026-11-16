@@ -600,7 +600,8 @@ body.on-thanks .site,body.on-thanks .appx{display:none}
             </div>
             <input type="hidden" id="srcField" name="src" value="meta-ad">
             <input type="hidden" id="verField" name="version" value="thomas">
-            <button type="submit" class="a22a-btn a22a-btn--accent a22a-btn--lg">Register free<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
+            <div class="a22a-notice a22a-notice--warning" id="formErr" role="alert" style="display:none"><span id="formErrText"></span></div>
+            <button type="submit" id="submitBtn" class="a22a-btn a22a-btn--accent a22a-btn--lg"><span id="submitLabel">Register free</span><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
             <p class="promise"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v16H3zM3 10h18M8 3v4M16 3v4"/></svg><span>Your Google Calendar invite, with the Zoom link inside, arrives by email straight after you register.</span></p>
           </form>
         </div>
@@ -1031,13 +1032,30 @@ body.on-thanks .site,body.on-thanks .appx{display:none}
   var $ = function(id){ return document.getElementById(id); };
   var reduce = matchMedia('(prefers-reduced-motion:reduce)').matches;
 
+  // ---------- config: edit here ----------
+  var CONFIG = {
+    webhook: 'https://nathanwoork.app.n8n.cloud/webhook/webinar-signup',  // production URL, never /webhook-test/
+    timeoutMs: 15000,
+    tz: '+08:00',                      // Malaysia time
+    durationMinutes: 60,               // webinar_end = start + this (timed sessions only)
+    title: 'Free AI Content Webinar',
+    // Zoom join links by session. Visible to anyone who views the page source.
+    // Leave '' when there is no link yet: n8n then skips the email but still sends the calendar invite.
+    zoomLinks: {
+      thu19: 'https://us05web.zoom.us/j/89998847066?pwd=XUJeEd0WfbZbzbqkW3v8mXhmV470p2.1',
+      thu26: 'https://us05web.zoom.us/j/89998847066?pwd=XUJeEd0WfbZbzbqkW3v8mXhmV470p2.1',
+      tue17: '',   // Mandarin (Jacky Guan), time and link to be confirmed
+      tue24: ''
+    }
+  };
+
   // One page version per trainer, so the two audiences never mix.
   var VERSIONS = {
     thomas:{ trainer:'Thomas Au', lang:'English', eyebrow:'Free webinar · English · on Zoom', other:'jacky',
       help:'This version only lists Thomas Au’s English sessions.',
       sessions:[
-        {id:'thu19', label:'Thu 19 Nov · 8:30pm · English', when:'Thursday 19 November, 8:30pm', start:'2026-11-19T20:30:00', end:'2026-11-19T22:00:00', g:'20261119T123000Z/20261119T140000Z', day:'19', mon:'Thursday, November', time:'8:30pm · Malaysia time (GMT+8)', cycle:'thomas-2026-11-19'},
-        {id:'thu26', label:'Thu 26 Nov · 8:30pm · English', when:'Thursday 26 November, 8:30pm', start:'2026-11-26T20:30:00', end:'2026-11-26T22:00:00', g:'20261126T123000Z/20261126T140000Z', day:'26', mon:'Thursday, November', time:'8:30pm · Malaysia time (GMT+8)', cycle:'thomas-2026-11-26'}
+        {id:'thu19', label:'Thu 19 Nov · 8:30pm · English', when:'Thursday 19 November, 8:30pm', start:'2026-11-19T20:30:00', end:'2026-11-19T21:30:00', g:'20261119T123000Z/20261119T133000Z', day:'19', mon:'Thursday, November', time:'8:30pm · Malaysia time (GMT+8)', cycle:'thomas-2026-11-19'},
+        {id:'thu26', label:'Thu 26 Nov · 8:30pm · English', when:'Thursday 26 November, 8:30pm', start:'2026-11-26T20:30:00', end:'2026-11-26T21:30:00', g:'20261126T123000Z/20261126T133000Z', day:'26', mon:'Thursday, November', time:'8:30pm · Malaysia time (GMT+8)', cycle:'thomas-2026-11-26'}
       ]},
     jacky:{ trainer:'Jacky Guan', lang:'Mandarin', eyebrow:'免费线上讲座 · Free webinar in Mandarin', other:'thomas',
       help:'这个版本只显示 Jacky Guan 的华语讲座。This version only lists Jacky Guan’s Mandarin sessions.',
@@ -1097,14 +1115,38 @@ body.on-thanks .site,body.on-thanks .appx{display:none}
   function clearErr(id){ var f = $(id); f.classList.remove('a22a-field--error'); f.querySelector('.a22a-field__help').textContent = HELP[id]; }
   function digits(x){ return x.replace(/[^\d]/g,''); }
 
-  // ---------- n8n hand-off: Zoom registration, calendar invite, Google Sheet ----------
-  var WEBHOOK = 'https://nathanwoork.app.n8n.cloud/webhook/webinar-signup';
-  // Anything here is visible to anyone who views the page source. Prefer leaving these
-  // empty and letting n8n look up the Zoom link from session_id.
-  var ZOOM_LINKS = {thu19:'', thu26:'', tue17:'', tue24:''};
+  // ---------- input clean-up ----------
+  function cleanName(x){ return x.replace(/\s+/g,' ').trim(); }
+  // Malaysia default: 012-345 6789 -> +60123456789. Numbers that already start with + or 00 are kept.
+  function toIntl(raw){
+    var t = String(raw || '').trim();
+    var d = t.replace(/\D/g,'');
+    if(!d) return '';
+    if(t.charAt(0) === '+') return '+' + d;
+    if(d.indexOf('00') === 0) return '+' + d.slice(2);
+    if(d.indexOf('60') === 0 && d.length >= 11) return '+' + d;
+    if(d.charAt(0) === '0') return '+60' + d.slice(1);
+    return '+60' + d;
+  }
+  function validIntl(n){
+    var d = n.replace(/\D/g,'');
+    if(d.indexOf('60') === 0) return d.length >= 10 && d.length <= 12;   // Malaysian number
+    return d.length >= 8 && d.length <= 15;                              // other country
+  }
 
-  function sendToN8n(lead, v, s){
-    var payload = {
+  // ---------- n8n hand-off: email with Zoom link, Google Sheet, Google Calendar invite ----------
+  function isoMYT(naive, addMinutes){
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})$/.exec(naive);
+    var t = Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]) + (addMinutes || 0) * 60000;
+    return new Date(t).toISOString().slice(0,19) + CONFIG.tz;
+  }
+  function zoomFor(id){
+    var z = (CONFIG.zoomLinks[id] || '').trim();
+    return (/^https:\/\//.test(z) && z.indexOf('YOUR_MEETING_ID') < 0) ? z : '';
+  }
+  function buildPayload(lead, v, s){
+    var allDay = !!s.allDay;
+    return {
       name: lead.name,
       email: lead.email,
       phone: lead.phone,
@@ -1114,39 +1156,67 @@ body.on-thanks .site,body.on-thanks .appx{display:none}
       language: v.lang,
       source: srcSel.value,
       version: verSel.value,
-      webinar_title: 'Free AI Content Webinar',
-      webinar_start: s.start + '+08:00',
-      webinar_end: s.end + '+08:00',
-      all_day: !!s.allDay,
-      webinar_description: 'Free webinar with ' + v.trainer,
-      zoom_link: ZOOM_LINKS[s.id] || ''
+      webinar_title: CONFIG.title,
+      webinar_start: isoMYT(s.start, 0),
+      webinar_end: allDay ? isoMYT(s.end, 0) : isoMYT(s.start, CONFIG.durationMinutes),
+      all_day: allDay,
+      webinar_description: 'Free webinar with ' + v.trainer + ' (' + v.lang + ')',
+      zoom_link: zoomFor(s.id)
     };
-    // Fire and forget: the visitor goes straight to the thank-you page (no loading step).
-    // keepalive lets the request finish even while the page changes.
-    try {
-      fetch(WEBHOOK, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(payload),
-        keepalive: true
-      }).catch(function(err){ console.warn('n8n webhook failed', err); });
-    } catch(err){ console.warn('n8n webhook failed', err); }
+  }
+  function postLead(payload){
+    var ctrl = ('AbortController' in window) ? new AbortController() : null;
+    var timer = setTimeout(function(){ if(ctrl) ctrl.abort(); }, CONFIG.timeoutMs);
+    return fetch(CONFIG.webhook, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function(r){
+      clearTimeout(timer);
+      if(!r.ok) throw new Error('Webhook answered HTTP ' + r.status);
+      return r;
+    }, function(err){ clearTimeout(timer); throw err; });
+  }
+
+  // ---------- submit ----------
+  var sending = false, btn = $('submitBtn'), btnLabel = $('submitLabel');
+  function setSending(on){
+    sending = on; btn.disabled = on; btn.setAttribute('aria-busy', on ? 'true' : 'false');
+    btnLabel.textContent = on ? 'Sending…' : 'Register free';
+  }
+  function formError(msg){
+    var box = $('formErr');
+    $('formErrText').textContent = msg || '';
+    box.style.display = msg ? 'block' : 'none';
   }
 
   $('stateForm').addEventListener('submit', function(e){
     e.preventDefault();
+    if(sending) return;
     px('Lead (button click)');
-    var name = $('name').value.trim(), email = $('email').value.trim(), waRaw = $('wa').value.trim();
-    var same = $('samePhone').checked, phoneRaw = same ? waRaw : $('phone').value.trim();
+    formError('');
+    var name = cleanName($('name').value), email = $('email').value.trim().toLowerCase();
+    var wa = toIntl($('wa').value), same = $('samePhone').checked;
+    var phone = same ? wa : toIntl($('phone').value);
     var ok = true, first = null;
-    if(!name){ setErr('fName','Enter your full name.'); ok = false; first = first || 'name'; } else clearErr('fName');
+    if(name.length < 2){ setErr('fName','Enter your full name.'); ok = false; first = first || 'name'; } else clearErr('fName');
     if(!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)){ setErr('fEmail','Enter a full email address, such as you@company.com.'); ok = false; first = first || 'email'; } else clearErr('fEmail');
-    var w = digits(waRaw).length;
-    if(w < 9 || w > 13){ setErr('fWa','Enter a Malaysian mobile number, such as 012 345 6789.'); ok = false; first = first || 'wa'; } else clearErr('fWa');
-    if(!same){ var ph = digits(phoneRaw).length; if(ph < 9 || ph > 13){ setErr('fPhone','Enter a phone number, such as 012 345 6789.'); ok = false; first = first || 'phone'; } else clearErr('fPhone'); }
+    if(!validIntl(wa)){ setErr('fWa','Enter a mobile number, such as 012 345 6789.'); ok = false; first = first || 'wa'; } else clearErr('fWa');
+    if(!same){ if(!validIntl(phone)){ setErr('fPhone','Enter a phone number, such as 012 345 6789.'); ok = false; first = first || 'phone'; } else clearErr('fPhone'); }
     if(!ok){ $(first).focus(); return; }
-    sendToN8n({name:name, email:email, wa:waRaw, phone:phoneRaw}, V(), S());
-    showThanks({name:name, email:email, wa:waRaw, phone:phoneRaw});
+
+    var lead = {name:name, email:email, wa:wa, phone:phone};
+    var v = V(), s = S();
+    setSending(true);
+    postLead(buildPayload(lead, v, s)).then(function(){
+      setSending(false);
+      showThanks(lead);
+    }).catch(function(err){
+      setSending(false);
+      if(window.console) console.warn('Registration failed', err);
+      formError('We could not complete your registration just now. Please check your connection and press Register free again.');
+    });
   });
 
   function calUrl(v, s){
